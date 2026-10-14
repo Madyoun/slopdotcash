@@ -25,10 +25,12 @@ import {
   solanaPaymentAdapter,
 } from "../.local/adapter.mjs";
 import {
+  completeSolanaBinding,
   createSolanaAttester,
   createSolanaExecutor,
   preflightSolanaDeployment,
 } from "../.local/executor.mjs";
+import { handlePaymentsApi } from "../.local/handler.mjs";
 import { indexPaymentEvent } from "../.local/ledger.mjs";
 import { scanSolanaPayments } from "../.local/scanner.mjs";
 import { expectedDeployment } from "./deployment.mjs";
@@ -143,6 +145,7 @@ test("durable executor verifies SQLite consent, binds, creates ATAs, pays and re
       [...domain],
       identity.publicKey,
       fee.publicKey,
+      bn(2),
       bn(2),
     )
     .accountsStrict({
@@ -322,6 +325,7 @@ test("durable executor verifies SQLite consent, binds, creates ATAs, pays and re
     feeRecipient: fee.publicKey.toBase58(),
     ...expectedDeployment,
     bindingDelaySeconds: "2",
+    rotationDelaySeconds: "2",
   };
   const common = {
     PAYMENTS_DB: db,
@@ -363,11 +367,67 @@ test("durable executor verifies SQLite consent, binds, creates ATAs, pays and re
     ),
     /Reviewed project authorities/,
   );
-  const attester = createSolanaAttester({
+  const identityEnvironment = {
     ...common,
     SOLANA_SIGNER: signer(identity),
     JOURNAL: journal("identity:"),
-  });
+  };
+  const attester = createSolanaAttester(identityEnvironment);
+  // The account API reaches the attester role through its service binding,
+  // exactly as workers/payment-executor/index.ts routes /v1/pay and
+  // /v1/complete-bind for SIGNER_ROLE=attester.
+  const attesterService = {
+    async fetch(request) {
+      const { transaction, ...binding } = await request.json();
+      assert.equal(
+        request.headers.get("idempotency-key"),
+        binding.idempotencyKey,
+      );
+      const path = new URL(request.url).pathname;
+      try {
+        return Response.json(
+          path === "/v1/complete-bind"
+            ? await completeSolanaBinding(
+                identityEnvironment,
+                binding,
+                transaction,
+              )
+            : await attester.submit(binding),
+        );
+      } catch {
+        return Response.json(
+          { error: "execution_pending_or_rejected" },
+          { status: 409 },
+        );
+      }
+    },
+  };
+  const session = "s".repeat(43);
+  sql
+    .prepare(
+      "INSERT INTO points_members(actor_id,github_id,login,joined_at,public) VALUES('executor-member','103','test-contributor',?,0)",
+    )
+    .run(now);
+  sql
+    .prepare("INSERT INTO points_sessions VALUES(?,?,?)")
+    .run(
+      createHash("sha256").update(session).digest("hex"),
+      "executor-member",
+      new Date(Date.now() + 3600000).toISOString(),
+    );
+  const account = async (path, body) =>
+    handlePaymentsApi(
+      new Request(`https://slop.cash/api/v1/payments${path}`, {
+        method: "POST",
+        headers: {
+          cookie: `__Host-slop_points=${session}`,
+          origin: "https://slop.cash",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(body),
+      }),
+      { db, solanaAttester: attesterService },
+    );
   let gasSignatures = 0;
   const gasSigner = signer(gas);
   const executor = createSolanaExecutor({
@@ -380,14 +440,107 @@ test("durable executor verifies SQLite consent, binds, creates ATAs, pays and re
       },
     },
     JOURNAL: journal("gas:"),
-    ATTESTER: attester,
   });
   await assert.rejects(
     executor.submit({ ...input, destination: fee.publicKey.toBase58() }),
     /Payout request differs/,
   );
-  await assert.rejects(executor.submit(input), /binding awaiting finality/);
-  const bound = await attester.submit(input);
+  await assert.rejects(executor.submit(input), /co-signature/);
+  // The contributor asks the account API for the half-signed binding. Only the
+  // signed-in contributor's own reserved award has one.
+  assert.equal(
+    (
+      await handlePaymentsApi(
+        new Request(
+          "https://slop.cash/api/v1/payments/wallets/solana-bind/prepare",
+          {
+            method: "POST",
+            headers: {
+              origin: "https://slop.cash",
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({ obligationId: input.obligationId }),
+          },
+        ),
+        { db, solanaAttester: attesterService },
+      )
+    ).status,
+    401,
+  );
+  assert.equal(
+    (
+      await account("/wallets/solana-bind/prepare", {
+        obligationId: "0".repeat(64),
+      })
+    ).status,
+    409,
+  );
+  const preparedResponse = await account("/wallets/solana-bind/prepare", {
+    obligationId: input.obligationId,
+  });
+  assert.equal(preparedResponse.status, 200);
+  // The attester half-signs the binding; only the destination wallet can
+  // complete it, over exactly the prepared bytes.
+  const prepared = await preparedResponse.json();
+  assert.ok(prepared.transaction, "prepared binding returns bytes to co-sign");
+  assert.deepEqual(await attester.submit(input), prepared);
+  const raw = Buffer.from(prepared.transaction, "base64");
+  assert.equal(raw[0], 2);
+  const bindMessage = raw.subarray(129);
+  const cosign = async (wallet) =>
+    Buffer.concat([
+      raw.subarray(0, 65),
+      Buffer.from(await signer(wallet).signMessage(bindMessage)),
+      bindMessage,
+    ]).toString("base64");
+  await assert.rejects(
+    completeSolanaBinding(identityEnvironment, input, await cosign(fee)),
+    /wallet signature rejected/,
+  );
+  await assert.rejects(
+    completeSolanaBinding(
+      identityEnvironment,
+      input,
+      Buffer.concat([raw.subarray(0, 129), bindMessage, Buffer.of(0)]).toString(
+        "base64",
+      ),
+    ),
+    /differs from the prepared binding/,
+  );
+  // A valid attempt that the attester never prepared has no journaled bytes.
+  sql
+    .prepare("INSERT INTO payment_attempts VALUES(?,?,?,?,NULL,'prepared')")
+    .run("unprepared-attempt", input.obligationId, input.claimId, now);
+  await assert.rejects(
+    completeSolanaBinding(
+      identityEnvironment,
+      { ...input, idempotencyKey: "unprepared-attempt" },
+      await cosign(recipient),
+    ),
+    /No prepared binding/,
+  );
+  // A wrong co-signature through the account API changes nothing.
+  assert.equal(
+    (
+      await account("/wallets/solana-bind/complete", {
+        obligationId: input.obligationId,
+        transaction: await cosign(fee),
+      })
+    ).status,
+    409,
+  );
+  const completed = await account("/wallets/solana-bind/complete", {
+    obligationId: input.obligationId,
+    transaction: await cosign(recipient),
+  });
+  assert.equal(completed.status, 200);
+  const bound = await completed.json();
+  assert.equal(bound.transactionId, prepared.transactionId);
+  // Completing again re-broadcasts the same signed bytes.
+  assert.deepEqual(
+    await completeSolanaBinding(identityEnvironment, input, await cosign(fee)),
+    bound,
+  );
   await finalized(bound.transactionId);
   // Persist real signed bytes, then interrupt the transport before broadcast.
   const originalFetch = globalThis.fetch;
@@ -470,7 +623,6 @@ test("durable executor verifies SQLite consent, binds, creates ATAs, pays and re
     ...common,
     SOLANA_SIGNER: signer(gas),
     JOURNAL: journal("gas:"),
-    ATTESTER: attester,
   });
   assert.equal(
     (await restarted.submit(input)).transactionId,
@@ -539,6 +691,7 @@ test("durable executor verifies SQLite consent, binds, creates ATAs, pays and re
       [...domain],
       identity.publicKey,
       fee.publicKey,
+      bn(2),
       bn(2),
     )
     .accountsStrict({

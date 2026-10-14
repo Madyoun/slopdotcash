@@ -34,6 +34,10 @@ export async function paymentDeployments(
         ...deployment,
         chain: network.chain,
         ...(network.chainId ? { chainId: network.chainId } : {}),
+        ...(network.gasCeiling ? { gasCeiling: network.gasCeiling } : {}),
+        ...(network.scanPageBlocks
+          ? { scanPageBlocks: network.scanPageBlocks }
+          : {}),
       });
     }
   }

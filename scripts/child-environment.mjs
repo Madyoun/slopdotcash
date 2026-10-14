@@ -17,6 +17,7 @@ const INHERITED_ENVIRONMENT_NAMES = Object.freeze([
   "SHELL",
   "SLOP_PYTHON",
   "SLOP_E2E_PORT",
+  "SLOP_PROFILES_INPUT",
   "TEMP",
   "TERM",
   "TMP",

@@ -269,7 +269,21 @@ export async function checkFundingRecordPr(input: {
     const transactions = new Set<string>();
     const recordIds = new Set<string>();
     for (const entry of treeEntries(root, input.baseSha, "funding")) {
-      if (entry.path === "funding/README.md") continue;
+      // The funding tree also carries operational inventory that is never a
+      // funding record: preparations, vault execution ledgers, quality
+      // samples, payout reservations, and per-project signer-access reports.
+      // buildFundingIndex ignores the same set when it assembles the index;
+      // none of them can collide with a funding transaction or record id.
+      if (
+        entry.path === "funding/README.md" ||
+        entry.path === "funding/maintainer-payouts.md" ||
+        entry.path === "funding/payment-reservations.json" ||
+        entry.path.startsWith("funding/preparations/") ||
+        entry.path.startsWith("funding/executions/") ||
+        entry.path.startsWith("funding/quality/") ||
+        /^funding\/[^/]+\/signer-access\//u.test(entry.path)
+      )
+        continue;
       if (/^funding\/[^/]+\/commitments\//u.test(entry.path)) {
         const path = entry.path.match(COMMITMENT_PATH);
         if (!path || entry.mode !== "100644")

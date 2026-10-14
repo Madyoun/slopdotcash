@@ -7,13 +7,37 @@ calldata, amounts, tokens, programs, or arbitrary destinations.
 
 Deploy a separate Worker for each test network, isolated database, and role. The identity attester has only
 that chain's test identity key. The gas relayer has only its own test gas key.
-Each Worker has its own SQLite Durable Object journal. The relayer reaches the
-attester through a private service binding. Both roles independently read the
-current wallet authorization from D1, reconstruct the exact signed consent,
-verify the wallet signature, check its GitHub actor and immutable claim digest,
-and inspect the finalized obligation. This trusts the GitHub session admission
-and reviewed deployment registry. It does not make GitHub identity verifiable
-without the identity authority.
+Each Worker has its own SQLite Durable Object journal. On EVM networks the
+relayer reaches the attester through a private service binding. Both roles
+independently read the current wallet authorization from D1, reconstruct the
+exact signed consent, verify the wallet signature, check its GitHub actor and
+immutable claim digest, and inspect the finalized obligation. This trusts the
+GitHub session admission and reviewed deployment registry. It does not make
+GitHub identity verifiable without the identity authority.
+
+The attester cannot bind on its own: every destination binding also carries
+the destination wallet's signature (PAY-05, escrow review H-1). On Base the
+contributor signs an EIP-712 `DestinationBinding` for the exact chain, vault,
+actor, destination, expected version, claim digest and expiry through the
+account API (`/wallets/bind-challenge`, then `/wallets/bind-authorize`), which
+takes the chain ID from the reviewed deployment, stores the signature in the
+low-s, 27-or-28 encoding the vault accepts, and appends it to
+`payment_binding_authorizations`. A renewal with a new expiry is a new row, so
+an expired authorization never blocks the claim. The attester reads the stored
+signature with the latest expiry for the on-chain version it is about to bind,
+verifies it again, and submits it unchanged; with no stored signature it
+refuses, and the award waits for the contributor. On Solana the destination keypair must sign
+the same transaction: `POST /v1/pay` on the attester prepares, half-signs and
+journals the `bind_wallet` transaction and returns its bytes; the contributor's
+wallet signs them; `POST /v1/complete-bind` checks that the bytes, the identity
+signature and the wallet signature all match before broadcasting. The signed-in
+contributor reaches both through the account API
+(`/wallets/solana-bind/prepare`, then `/wallets/solana-bind/complete`), which
+selects the contributor's current claim and payout attempt and calls the
+attester through its service binding. The
+transaction must be completed inside its blockhash lifetime, so a Solana
+binding is always an interactive step; the relayer reports a missing binding
+and never requests one.
 
 The hosted wrapper checks the configured test network and the RPC's chain or
 genesis identity before reading the signer secret. Base mainnet and Solana
@@ -38,8 +62,9 @@ token accounts idempotently and pays through the version-bound escrow instructio
 
 `POST /v1/pay` returns a submitted transaction identity. It does not mark a
 payment paid; the independent scanner and verifier must prove finality first.
-A missing finalized wallet binding requests the separate attester and remains
-retryable until binding finality. A successor wallet activates only after 24 hours have passed since both its
+On Base a missing finalized wallet binding requests the separate attester and
+remains retryable until binding finality; on Solana it waits for the
+contributor's co-signed binding. A successor wallet activates only after 24 hours have passed since both its
 registration and signed authorization. The previous on-chain claim must occur
 in the same actor/chain predecessor lineage, and all older-wallet payment
 attempts must be reconciled. An operator cannot bypass this path.
@@ -58,10 +83,12 @@ the old attempt failed only after confirmed retirement; a null lookup alone is
 never proof that signing cannot race the lookup.
 
 Signer keys must be dedicated to these Workers. Manual external transactions
-using the same keys would invalidate the nonce ownership assumption. A Base
+using the same keys would invalidate the nonce ownership assumption. An EVM
 transaction stuck due to fee pricing requires operator reconciliation; there
-is no automatic gas-price replacement in this version. Base signing limits gas
-to 500,000 and max gas price to 10 gwei. Never delete or restore an old journal
+is no automatic gas-price replacement in this version. EVM signing limits gas
+to the deployment record's `gasCeiling` (copied from the network registry:
+500,000 on Base) and max gas price to 10 gwei; a record without a ceiling is
+refused. Never delete or restore an old journal
 snapshot to clear an error. A restore must preserve every signed attempt and
 reconcile the chain before resuming.
 
@@ -126,13 +153,14 @@ operational material and has no read route other than transaction-ID lookup.
 
 ## Validation boundaries
 
-`bun backend/payments/base.integration.ts` executes the account API, signed
+`bun backend/payments/evm.integration.ts` executes the account API, signed
 wallet consent, finalized reservation scanner, real separate EIP1559 signers,
 payment dispatch, disk-backed journal recovery after a deliberately lost RPC
 response, and finalized payout indexing against actual Anvil contracts. It
 checks the net 98-USDC balance from a 100-USDC gross award, rejects a substituted
-destination, verifies scanner replay, rejects an early successor, and executes
-the successor payment after a simulated 25-hour delay. It also proves signed
+destination, refuses to bind without the wallet's accepted binding, verifies
+scanner replay, rejects an early successor, and executes the successor payment
+after a simulated 25-hour delay with the successor wallet's own acceptance. It also proves signed
 attempt discovery after wallet replacement and prevents retirement of signed
 transactions. The deterministic Anvil mnemonic is a
 public test fixture, not a user secret.

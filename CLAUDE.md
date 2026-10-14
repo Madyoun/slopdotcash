@@ -22,13 +22,22 @@ alias only.
 - Slop never infers copyright ownership, legal capacity, assignment, wallet
   control, or payment authority.
 - Slop never holds keys, signs transactions, broadcasts payments, or claims
-  success before public evidence proves it, except for one key on the opt-in
-  `squads-project-vault` instrument (RFC #500, `funding/README.md`). For that
-  instrument only: Slop holds one of three keys on a project vault. That key
-  can vote on a payout the creator proposed. It cannot propose a transfer,
-  execute one, change the signers, or act alone. Slop holds no customer
-  balance, takes no fee from the vault, and never broadcasts a transfer of
-  vault funds.
+  success before public evidence proves it, except for the two narrowly scoped
+  keys below. No other exception exists.
+  - One key on the opt-in `squads-project-vault` instrument (RFC #500,
+    `funding/README.md`). For that instrument only: Slop holds one of three
+    keys on a project vault. That key can vote on a payout the creator
+    proposed. It cannot propose a transfer, execute one, change the signers,
+    or act alone. Slop holds no customer balance, takes no fee from the vault,
+    and never broadcasts a transfer of vault funds.
+  - The escrow identity attester key (PAY-05, approved by the repository owner
+    on 14 October 2026). It only attests the authenticated GitHub actor for a
+    destination binding that the destination wallet also signs, and it submits
+    only that binding transaction. It cannot choose an amount, move, pay or
+    route funds alone, or reach free or reserved funds. Each binding waits the
+    reviewed binding delay, and the project owner can cancel it in that time.
+    A public timelocked rotation replaces the key, and the attester cannot
+    block it.
 - Never publish secrets, prompts, responses, source files, credentials, session
   identifiers, private trajectories, or signing material.
 

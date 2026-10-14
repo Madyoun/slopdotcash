@@ -10,7 +10,7 @@ const fixtureLog = openSync("evidence/payout-browser-fixture.log", "w");
 const previewLog = openSync("evidence/payout-browser-preview.log", "w");
 const fixture = spawn(
   "bun",
-  ["backend/payments/base.integration.ts", "--serve"],
+  ["backend/payments/evm.integration.ts", "--serve"],
   { stdio: ["ignore", fixtureLog, fixtureLog] },
 );
 const preview = spawn(

@@ -1,14 +1,19 @@
 import {
-  type BaseEscrowConfig,
+  type EvmEscrowConfig,
   verifyPayment,
   verifyReserve,
 } from "../../contracts/evm/adapter";
+import type { PaymentChain } from "../../src/lib/payments/contracts";
 import type { D1Database } from "../trace/cloudflare-persistence";
 import type { PaymentChainAdapter } from "./ledger";
-/** Deployment configuration must come from the reviewed project manifest. */
-export function basePaymentAdapter(
+/** Deployment configuration must come from the reviewed project manifest, including its chain. */
+export function evmPaymentAdapter(
   db: D1Database,
-  config: BaseEscrowConfig & { projectId: string; network: string },
+  config: EvmEscrowConfig & {
+    projectId: string;
+    network: string;
+    chain: PaymentChain;
+  },
 ): PaymentChainAdapter {
   return {
     async verifyFinalized(input) {
@@ -39,7 +44,7 @@ export function basePaymentAdapter(
         sourceDigest,
         projectId: config.projectId,
         network: config.network,
-        chain: "base",
+        chain: config.chain,
         vault: config.vault,
       };
     },

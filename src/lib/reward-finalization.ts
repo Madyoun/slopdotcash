@@ -31,6 +31,11 @@ export function finalizeRewardAllocation(
   if (proposal.status !== "proposed") {
     throw new TypeError("Only a proposed reward allocation can be finalized");
   }
+  if (proposal.review.lapsedAt) {
+    throw new TypeError(
+      "A lapsed reward allocation cannot be finalized; its review deadline has closed the cycle",
+    );
+  }
   if (proposal.allocations.length === 0) {
     throw new RangeError(
       "A zero-award cycle is already closed and has no allocation to approve",

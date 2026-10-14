@@ -179,9 +179,12 @@ export async function applyFundingReviewSubmission(
     const adjustment = byActor.get(row.actor.id);
     if (!adjustment) return row;
     const excluded = adjustment.decision === "exclude";
-    const changed =
-      adjustment.amountMinor !== row.suggestedMinor ||
-      excluded !== (row.state === "excluded");
+    // Only an amount change moves the review clock (AGENTS.md: "only such
+    // amount changes reset review"). A state-only flip, such as excluding a
+    // $0 row, still needs its public reason and still flips the row, but it
+    // must not renew the 14-day window.
+    const amountChanged = adjustment.amountMinor !== row.suggestedMinor;
+    const changed = amountChanged || excluded !== (row.state === "excluded");
     if (changed && !adjustment.reason)
       throw new TypeError("Material changes require a public reason");
     if (!changed)
@@ -192,7 +195,7 @@ export async function applyFundingReviewSubmission(
       throw new TypeError(
         "Held allocations require their separate resolution contract",
       );
-    material = true;
+    if (amountChanged) material = true;
     const amount = BigInt(adjustment.amountMinor);
     const reviewMinor = excluded
       ? 0n

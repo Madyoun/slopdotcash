@@ -13,19 +13,29 @@ export interface SolanaEscrowConfig {
   vault: string;
   mint: string;
   owner: string;
+  /** The identity authority at activation. Later authorities come only from the program's
+   * owner-proposed, fee-recipient-confirmed, timelocked rotation, so it is not compared with
+   * live state. */
   identityAuthority: string;
   feeRecipient: string;
   codeSha256: string;
   upgradeAuthority: string | null;
   /** Reviewed delay, in seconds, before a wallet binding can pay in this project. */
   bindingDelaySeconds: string;
+  /** Reviewed notice period, in seconds, before a proposed identity authority takes effect. */
+  rotationDelaySeconds: string;
 }
 const MAINNET_GENESIS = "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d";
 const TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
-/** Project account size: 249 bytes of v2 state, the i64 binding delay and the u64 service fees. */
-export const PROJECT_SIZE = 265;
-/** Wallet binding size: 152 bytes of v2 state plus the i64 bound_at time. */
-export const BINDING_SIZE = 160;
+/** Project account size: 265 bytes of v3 state, then the pending identity authority, its
+ * effective time and confirmation, and the i64 rotation delay. `migrate_project` grows a
+ * 265-byte account to this size. */
+export const PROJECT_SIZE = 314;
+/** Wallet binding size: 160 bytes of latest-binding state plus the u64 paid version and u8 veto count. */
+export const BINDING_SIZE = 169;
+/** Obligation size: 137 bytes of v2 state plus the i64 commit time. */
+export const OBLIGATION_SIZE = 145;
+export const OBLIGATION_DISCRIMINATOR = "a8ce8d6a584caca7";
 type Obj = Record<string, unknown>;
 const object = (value: unknown): Obj => {
   if (!value || typeof value !== "object" || Array.isArray(value))
@@ -128,11 +138,12 @@ export async function verifySolanaDeployment(
     config.upgradeAuthority !== null
   )
     throw new Error("Mainnet escrow requires a revoked upgrade authority");
-  if (
-    !/^(0|[1-9][0-9]{0,18})$/.test(config.bindingDelaySeconds) ||
-    BigInt(config.bindingDelaySeconds) > (1n << 63n) - 1n
-  )
-    throw new Error("Missing reviewed binding delay");
+  for (const delay of [config.bindingDelaySeconds, config.rotationDelaySeconds])
+    if (
+      !/^(0|[1-9][0-9]{0,18})$/.test(delay) ||
+      BigInt(delay) > (1n << 63n) - 1n
+    )
+      throw new Error("Missing reviewed binding or rotation delay");
   const response = object(
     await rpc(config, "getAccountInfo", [
       config.programId,
@@ -195,17 +206,43 @@ export async function verifySolanaDeployment(
     PROJECT_SIZE,
     "cda8bdcab5f78e13",
   );
+  const view = new DataView(project.buffer, project.byteOffset);
   if (
-    new DataView(project.buffer, project.byteOffset).getBigInt64(249, true) !==
-      BigInt(config.bindingDelaySeconds) ||
+    view.getBigInt64(249, true) !== BigInt(config.bindingDelaySeconds) ||
+    view.getBigInt64(306, true) !== BigInt(config.rotationDelaySeconds) ||
     pubkey(project, 8) !== config.owner ||
-    pubkey(project, 104) !== config.identityAuthority ||
     pubkey(project, 136) !== config.feeRecipient ||
     pubkey(project, 168) !== config.mint ||
     hex(project.slice(72, 104)) !== hex(digest(config.networkDomain))
   )
     throw new Error("Reviewed project authorities or asset mismatch");
   return project;
+}
+
+export interface SolanaAuthorityRotation {
+  identityAuthority: string;
+  /** Null when no rotation is proposed. */
+  pendingIdentityAuthority: string | null;
+  effectiveAt: string | null;
+  confirmed: boolean;
+  rotationDelaySeconds: string;
+}
+/** The identity authority in force and any pending rotation, from finalized project state. */
+export function solanaAuthorityRotation(
+  project: Uint8Array,
+): SolanaAuthorityRotation {
+  if (project.length !== PROJECT_SIZE)
+    throw new Error("Account layout mismatch");
+  const view = new DataView(project.buffer, project.byteOffset);
+  const pending = pubkey(project, 265);
+  const proposed = pending !== "11111111111111111111111111111111";
+  return {
+    identityAuthority: pubkey(project, 104),
+    pendingIdentityAuthority: proposed ? pending : null,
+    effectiveAt: proposed ? view.getBigInt64(297, true).toString() : null,
+    confirmed: proposed && project[305] === 1,
+    rotationDelaySeconds: view.getBigInt64(306, true).toString(),
+  };
 }
 
 /** The only award ID the program accepts for a source in this project. */
@@ -335,7 +372,7 @@ export function solanaPaymentAdapter(
             commitment: "finalized",
             encoding: "base64",
             filters: [
-              { dataSize: 137 },
+              { dataSize: OBLIGATION_SIZE },
               { memcmp: { offset: 48, bytes: config.projectPda } },
               { memcmp: { offset: 80, bytes: b64(award), encoding: "base64" } },
             ],
@@ -348,8 +385,8 @@ export function solanaPaymentAdapter(
       const obligation = account(
         object(found[0]).account,
         config.programId,
-        137,
-        "a8ce8d6a584caca7",
+        OBLIGATION_SIZE,
+        OBLIGATION_DISCRIMINATOR,
       );
       const gross = uint(obligation, 8),
         actor = uint(obligation, 112),
@@ -389,9 +426,10 @@ export function solanaPaymentAdapter(
           accounts[4] !== config.vault
         )
           throw new Error("Payment differs from award");
+        // The program skips the fee transfer when the fee is zero.
         const expected = [
           { to: accounts[5], amount: net },
-          { to: accounts[6], amount: fee },
+          ...(fee > 0n ? [{ to: accounts[6], amount: fee }] : []),
         ];
         if (children.length !== expected.length)
           throw new Error("Unexpected payout instructions");

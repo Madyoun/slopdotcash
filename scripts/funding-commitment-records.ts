@@ -38,6 +38,17 @@ async function boundedJson(path: string): Promise<unknown> {
   }
 }
 
+/** Orders ledger records by observation time, then record id. */
+export function sortByObservation(values: unknown[]): void {
+  values.sort((left, right) => {
+    const a = left as { observedAt?: string; recordId?: string };
+    const b = right as { observedAt?: string; recordId?: string };
+    return `${a.observedAt ?? ""}:${a.recordId ?? ""}`.localeCompare(
+      `${b.observedAt ?? ""}:${b.recordId ?? ""}`,
+    );
+  });
+}
+
 /** Every verified funding commitment record of one project, validated. */
 export async function loadProjectCommitmentRecords(
   projectId: string,
@@ -70,5 +81,8 @@ export async function loadProjectCommitmentRecords(
     .sort();
   const records: unknown[] = [];
   for (const path of paths) records.push(await boundedJson(path));
+  // Record IDs are content hashes, so path order is not time order. The
+  // ledger validator needs each correction after the record it supersedes.
+  sortByObservation(records);
   return assertProjectCommitmentLedger(records, instruments);
 }

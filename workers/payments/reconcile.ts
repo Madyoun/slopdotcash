@@ -1,4 +1,5 @@
 import type { D1Database } from "../../backend/trace/cloudflare-persistence";
+import { chainFamily } from "../../src/lib/escrow-policy.mjs";
 import type { PaymentDeployment } from "./index";
 
 async function rpc(
@@ -18,10 +19,11 @@ async function rpc(
   return body.result;
 }
 /** Reuse the same canonical finalized-revert proof for payout and binding retries. */
-export async function finalizedBaseRevert(
+export async function finalizedEvmRevert(
   url: string,
   chainId: string | undefined,
   transactionId: string,
+  chain: string,
 ) {
   if (
     !chainId ||
@@ -54,7 +56,7 @@ export async function finalizedBaseRevert(
   )
     return null;
   return {
-    chain: "base",
+    chain,
     transactionId,
     blockHash: block.hash,
     status: "reverted",
@@ -91,11 +93,12 @@ export async function reconcileFailedAttempts(
     const deployment = matches[0],
       url = rpcUrls[deployment.network];
     let proof: unknown;
-    if (deployment.chain === "base") {
-      proof = await finalizedBaseRevert(
+    if (chainFamily(deployment.chain) === "evm") {
+      proof = await finalizedEvmRevert(
         url,
         deployment.chainId,
         attempt.transactionId,
+        deployment.chain,
       );
       if (!proof) continue;
     } else {

@@ -266,7 +266,7 @@ try {
     PAYMENTS_DB: db,
     PAYMENT_DEPLOYMENTS: "[]",
     PAYMENT_RPC_URLS: "{}",
-    BASE_PAYMENT_EXECUTOR: service("base"),
+    EVM_PAYMENT_EXECUTOR: service("base"),
     SOLANA_PAYMENT_EXECUTOR: service("solana"),
   };
   for (let run = 1; run <= 2; run++) {

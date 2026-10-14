@@ -22,6 +22,7 @@ import {
   publicSignerReport,
 } from "../src/lib/signer-capability";
 import { canonicalFundingDecisionBytes } from "./check-funding-record-pr";
+import { sortByObservation } from "./funding-commitment-records";
 import { signerReportPath } from "./signer-access-ledger";
 import { assertSignerAccessReport } from "./verify-signer-access";
 
@@ -214,16 +215,6 @@ function latestObservedAt(
   }, initial);
 }
 
-function sortByObservation(values: unknown[]): void {
-  values.sort((left, right) => {
-    const a = left as { observedAt?: string; recordId?: string };
-    const b = right as { observedAt?: string; recordId?: string };
-    return `${a.observedAt ?? ""}:${a.recordId ?? ""}`.localeCompare(
-      `${b.observedAt ?? ""}:${b.recordId ?? ""}`,
-    );
-  });
-}
-
 export async function buildFundingIndex(
   options: {
     projects?: readonly FundingIndexProject[];
@@ -283,9 +274,10 @@ export async function buildFundingIndex(
       if (
         !instruments.some(
           (instrument) =>
-            // A 2-of-2 Squads vault, or a Base Sablier stream whose
-            // recipient attests (RFC #472).
+            // A 2-of-2 Squads vault, a 2-of-3 project vault (RFC #500), or a
+            // Base Sablier stream whose recipient attests (RFC #472).
             (instrument.kind === "squads-v4-vault" ||
+              instrument.kind === "squads-project-vault" ||
               (instrument.kind === "sablier-lockup-v4" &&
                 instrument.network === "base")) &&
             fundingInstrumentId(instrument) === report.instrumentId &&

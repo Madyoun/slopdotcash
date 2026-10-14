@@ -76,6 +76,8 @@ for (const deployment of deployments) {
     ...reviewed,
     chain: policy.chain,
     ...(policy.chainId ? { chainId: policy.chainId } : {}),
+    ...(policy.gasCeiling ? { gasCeiling: policy.gasCeiling } : {}),
+    ...(policy.scanPageBlocks ? { scanPageBlocks: policy.scanPageBlocks } : {}),
   };
   if (!expected || !isDeepStrictEqual(expected, deployment))
     throw new Error(
@@ -115,7 +117,7 @@ for (const role of ["attester", "relayer", "dispatcher"]) {
     vars: {
       PAYMENT_DEPLOYMENTS: JSON.stringify(deployments),
       ...(signer
-        ? { SIGNER_ROLE: role, CHAIN_FAMILY: ESCROW_NETWORKS[network].chain }
+        ? { SIGNER_ROLE: role, CHAIN_FAMILY: ESCROW_NETWORKS[network].family }
         : {}),
     },
     ...(signer
@@ -136,8 +138,8 @@ for (const role of ["attester", "relayer", "dispatcher"]) {
               binding:
                 role === "relayer"
                   ? "IDENTITY_ATTESTER"
-                  : network === "base-sepolia"
-                    ? "BASE_PAYMENT_EXECUTOR"
+                  : ESCROW_NETWORKS[network].family === "evm"
+                    ? "EVM_PAYMENT_EXECUTOR"
                     : "SOLANA_PAYMENT_EXECUTOR",
               service: names[role === "relayer" ? "attester" : "relayer"],
             },
@@ -157,7 +159,7 @@ const wrangler = quote(resolve(repository, "node_modules/.bin/wrangler"));
 const command = (role, operation) =>
   `${wrangler} ${operation} --config ${quote(configs[role])}`;
 const key =
-  network === "base-sepolia"
+  ESCROW_NETWORKS[network].family === "evm"
     ? "TEST_SIGNER_PRIVATE_KEY"
     : "TEST_SOLANA_SIGNER_SEED";
 const plan = [
@@ -176,7 +178,7 @@ const plan = [
   `${wrangler} deploy --config ${quote(inactiveDispatcher)}`,
   // Fresh-only admission prevents modifying any existing active stack.
   command("dispatcher", "secret put PAYMENT_RPC_URLS"),
-  ...(network.startsWith("solana")
+  ...(ESCROW_NETWORKS[network].family === "solana"
     ? [command("dispatcher", "secret put PAYMENT_SOLANA_GENESIS")]
     : []),
   command("dispatcher", "deploy"),

@@ -1,3 +1,4 @@
+import { chainFamily } from "../../src/lib/escrow-policy.mjs";
 import { type PaymentChain, payoutFee } from "../../src/lib/payments/contracts";
 import type { D1Database } from "../trace/cloudflare-persistence";
 
@@ -88,11 +89,12 @@ export async function indexPaymentEvent(
     if (!event.destination) throw new Error("Payout destination missing");
     const authorized = await db
       .prepare(
-        "SELECT 1 ok FROM wallet_claims w JOIN payment_wallet_authorizations a ON a.claim_id=w.id AND a.github_user_id=w.github_user_id WHERE w.github_user_id=? AND w.chain=? AND (CASE WHEN w.chain='base' THEN lower(w.wallet_address)=lower(?) ELSE w.wallet_address=? END)",
+        "SELECT 1 ok FROM wallet_claims w JOIN payment_wallet_authorizations a ON a.claim_id=w.id AND a.github_user_id=w.github_user_id WHERE w.github_user_id=? AND w.chain=? AND (CASE WHEN ?=1 THEN lower(w.wallet_address)=lower(?) ELSE w.wallet_address=? END)",
       )
       .bind(
         event.githubUserId,
         event.chain,
+        chainFamily(event.chain) === "evm" ? 1 : 0,
         event.destination,
         event.destination,
       )

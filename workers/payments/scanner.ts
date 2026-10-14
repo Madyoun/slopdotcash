@@ -6,6 +6,8 @@ export interface ScanDeployment {
   chain: string;
   vault: string;
   deploymentTransaction?: string;
+  /** EVM only: blocks per eth_getLogs page, inclusive, from the reviewed deployment record. */
+  scanPageBlocks?: string;
   projectPda?: string;
   programId?: string;
 }
@@ -36,13 +38,17 @@ async function rpc(
   if (body.error || !("result" in body)) throw new Error("Scanner RPC failed");
   return body.result;
 }
-/** A cursor advances only after every recognized finalized event is durably verified and indexed. */
-export async function scanBasePayments(
+/** A cursor advances only after every recognized finalized event is durably verified and indexed. The page size comes from the reviewed deployment record. */
+export async function scanEvmPayments(
   db: D1Database,
   deployment: ScanDeployment,
   rpcUrl: string,
   index: (event: ScanEvent) => Promise<void>,
 ): Promise<void> {
+  const page = deployment.scanPageBlocks;
+  if (page === undefined || !/^[1-9][0-9]{0,6}$/.test(page))
+    throw new Error("Reviewed scan page size required for EVM scanning");
+  const span = BigInt(page) - 1n;
   const cursor = await db
     .prepare(
       "SELECT position FROM payment_chain_cursors WHERE project_id=? AND network=?",
@@ -68,7 +74,7 @@ export async function scanBasePayments(
   if (!finalized) throw new Error("Finalized chain head unavailable");
   const end = BigInt(finalized.number);
   if (from > end) return;
-  const to = from + 1999n < end ? from + 1999n : end;
+  const to = from + span < end ? from + span : end;
   const logs = (await rpc(rpcUrl, "eth_getLogs", [
     {
       address: deployment.vault,

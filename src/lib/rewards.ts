@@ -1728,6 +1728,9 @@ export function assertRewardSettlementManifest(
       "settlement does not account for every approved intent",
     );
   }
+  if (recipients.length === 0) {
+    throw new TypeError("settlement has no recipients");
+  }
 
   const finalizedIntents = new Set<string>();
   const attempts = array(manifest.attempts, "settlement attempts").map(
@@ -1812,7 +1815,7 @@ export function assertRewardSettlementManifest(
   const paidMinor = sumMinor(
     recipients.map((recipient) => recipient.paidMinor),
   );
-  const feeMinor = feeForPrincipal(paidMinor, allocation.feeBasisPoints);
+  const feeMinor = feeForPrincipal(approvedMinor, allocation.feeBasisPoints);
   const platformFeeRecord = record(
     manifest.platformFee,
     "settlement platformFee",

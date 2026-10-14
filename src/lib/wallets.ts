@@ -4,6 +4,8 @@
  * custody of the key; payout reviewers preserve the exact source observation.
  */
 
+import { chainFamily } from "./escrow-policy.mjs";
+
 export const WALLET_MARKER_VERSION = "1" as const;
 export const WALLET_MARKER_PREFIX = "slop-wallet:v1" as const;
 export const WALLET_CLAIM_REPOSITORY = "SlopDotCash/slopdotcash" as const;
@@ -100,7 +102,9 @@ export function isBaseAddress(value: unknown): value is string {
 export function isWalletAddress(chain: WalletChain, value: unknown): boolean {
   return (
     isWalletChain(chain) &&
-    (chain === "base" ? isBaseAddress(value) : isSolanaAddress(value))
+    (chainFamily(chain) === "evm"
+      ? isBaseAddress(value)
+      : isSolanaAddress(value))
   );
 }
 

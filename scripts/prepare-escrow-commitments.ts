@@ -1,11 +1,8 @@
 /** Produce unsigned owner requests from an exact source-bound, review-complete proposal. */
 import { resolve } from "node:path";
-import {
-  baseAwardId,
-  buildCommitAwardCalldata,
-} from "../contracts/evm/adapter";
+import { buildCommitAwardCalldata, evmAwardId } from "../contracts/evm/adapter";
 import { solanaAwardId } from "../contracts/solana/adapter";
-import { ESCROW_NETWORKS } from "../src/lib/escrow-policy.mjs";
+import { chainFamily, ESCROW_NETWORKS } from "../src/lib/escrow-policy.mjs";
 import { findProject } from "../src/lib/projects.mjs";
 import {
   verifyCurrentEscrowDeployment,
@@ -66,6 +63,7 @@ export async function prepareEscrowCommitments(
   const decisions = new Map(
     review.decisions.rows.map((row) => [row.githubUserId, row]),
   );
+  const evm = chainFamily(project.escrow.chain) === "evm";
   const awards = proposal.awards
     .filter(
       (award) =>
@@ -76,14 +74,13 @@ export async function prepareEscrowCommitments(
     .map((award) => ({
       // The escrow accepts only this vault-bound ID, so no other project can
       // reserve it first.
-      awardId:
-        project.escrow?.chain === "base"
-          ? baseAwardId(
-              BigInt(ESCROW_NETWORKS[deployment.network].chainId ?? "0"),
-              deployment.vault,
-              `0x${award.sourceDigest}`,
-            ).slice(2)
-          : solanaAwardId(deployment.projectPda ?? "", award.sourceDigest),
+      awardId: evm
+        ? evmAwardId(
+            BigInt(ESCROW_NETWORKS[deployment.network].chainId ?? "0"),
+            deployment.vault,
+            `0x${award.sourceDigest}`,
+          ).slice(2)
+        : solanaAwardId(deployment.projectPda ?? "", award.sourceDigest),
       sourceDigest: award.sourceDigest,
       githubUserId: award.githubUserId,
       grossMicro: decisions.get(award.githubUserId)?.approvedGrossMicro ?? "0",
@@ -100,7 +97,7 @@ export async function prepareEscrowCommitments(
     owner: deployment.owner,
     warning:
       "Unsigned requests are not approval or funding proof. The project owner must review and sign. Index each finalized commitment separately; partial batches remain partial.",
-    ...(project.escrow.chain === "base"
+    ...(evm
       ? {
           transactions: awards.map((award) => ({
             chainId: Number(ESCROW_NETWORKS[deployment.network].chainId),
