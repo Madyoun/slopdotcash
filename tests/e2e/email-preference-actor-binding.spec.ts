@@ -9,7 +9,7 @@
  */
 import { join } from "node:path";
 import { deploymentOrigins, deploymentTier } from "../../src/lib/deployment";
-import { expect, test } from "./fixtures";
+import { escapeRegExp, expect, test } from "./fixtures";
 
 const { site } = deploymentOrigins(
   deploymentTier(process.env.VITE_SLOP_ENVIRONMENT),
@@ -23,6 +23,15 @@ test("failed preflight never enables an email switch that writes to a new accoun
 }) => {
   diagnostics.allowResponse(503, "GET", "/api/v1/project-session");
   diagnostics.allowResponse(403, "POST", "/api/v1/notifications/email");
+  // The page serves its bundle on the deployed site origin, so the
+  // browser's console report of the injected 503 carries the site origin,
+  // not the local fixture origin allowResponse covers. Account for exactly
+  // that narrow injected failure here — no other console error is allowed.
+  const session503Console = new RegExp(
+    `^console Failed to load resource: the server responded with a status of 503 \\(Service Unavailable\\) at ${escapeRegExp(site)}/api/v1/project-session$`,
+    "u",
+  );
+  diagnostics.allow(session503Console);
   diagnostics.allowPreviewApiMisses();
   let sessionFail = true;
   let actor = "900000098";
@@ -146,12 +155,16 @@ test("failed preflight never enables an email switch that writes to a new accoun
     exact: true,
   });
   await expect(email).toHaveCount(1);
-  // Step 1: the identity preflight fails. The control stays unavailable
-  // and retryable; no switch is rendered and nothing is posted.
+  // Step 1: the identity preflight fails. The switch stays rendered but
+  // disabled (ready is null, so switchDisabled is true) and retryable;
+  // nothing is posted.
   await expect(email.getByText(/The account check failed/)).toBeVisible();
-  await expect(
-    email.getByRole("switch", { name: "Activity email", exact: true }),
-  ).toHaveCount(0);
+  const errorSwitch = email.getByRole("switch", {
+    name: "Activity email",
+    exact: true,
+  });
+  await expect(errorSwitch).toHaveCount(1);
+  await expect(errorSwitch).toBeDisabled();
   expect(posts).toHaveLength(0);
 
   // Step 2: retry with a working preflight. The preference loads for the
@@ -177,4 +190,9 @@ test("failed preflight never enables an email switch that writes to a new accoun
   expect(posts[0]?.header).toBe("900000098");
   await expect(toggle).not.toBeChecked();
   expect(posts).toHaveLength(1);
+  // The injected preflight failure is the only 503 source on this page:
+  // the account page's three session consumers each report it once in the
+  // console. Assert that exact count so the failure is accounted for, not
+  // silently allowed — any other console error still fails the fixture.
+  expect(diagnostics.count(session503Console)).toBe(3);
 });
